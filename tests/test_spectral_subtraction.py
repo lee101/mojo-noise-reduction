@@ -203,9 +203,11 @@ def test_nonfinite_input_is_rejected():
 def test_nonfinite_spectrum_is_rejected():
     subtractor = nr.SpectralSub(8, 20, 2, 3)
     spectrum = np.ones(5, dtype=np.complex128)
-    spectrum[2] = np.inf + 1j
+    before = subtractor.p_prev.copy()
+    spectrum[-1] = np.inf + 1j
     with pytest.raises(ValueError, match="finite"):
         subtractor.compute_gain_filter(spectrum)
+    assert np.array_equal(subtractor.p_prev, before)
 
 
 def test_wrong_spectrum_shape_is_rejected():

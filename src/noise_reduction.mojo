@@ -66,7 +66,7 @@ def fft_in_place(data: Ptr, n: Int, direction: Int):
         length *= 2
 
 
-def gain_filter(
+def gain_filter_range(
     spectrum: Ptr,
     history: Ptr,
     signal_power: Ptr,
@@ -77,10 +77,54 @@ def gain_filter(
     beta: Float64,
     alpha: Float64,
     gmin: Float64,
+    start: Int,
+    stop: Int,
 ):
     """Apply the minimum-statistics spectral-subtraction gain formula."""
     comptime W = simd_width_of[DType.float64]()
-    for k in range(n_bins):
+    var k = start
+    if alpha == 1.0:
+        var zeros = SIMD[DType.float64, W](0.0)
+        var floors = SIMD[DType.float64, W](gmin)
+        while k + W <= stop:
+            var real_values = (spectrum + 2 * k).strided_load[width=W](2)
+            var imag_values = (spectrum + 2 * k + 1).strided_load[width=W](2)
+            var power_values = real_values * real_values + imag_values * imag_values
+            signal_power.store(k, power_values)
+
+            var row = k * history_length
+            var minimum_values = power_values
+            if history_length == 1:
+                (history + row).strided_store[width=W](power_values, history_length)
+            else:
+                var oldest_values = (history + row).strided_load[width=W](
+                    history_length
+                )
+                minimum_values = oldest_values
+                for h in range(1, history_length - 1):
+                    var values = (history + row + h).strided_load[width=W](
+                        history_length
+                    )
+                    minimum_values = min(minimum_values, values)
+                    (history + row + h - 1).strided_store[width=W](
+                        values, history_length
+                    )
+                minimum_values = min(minimum_values, power_values)
+                (history + row + history_length - 2).strided_store[width=W](
+                    power_values, history_length
+                )
+                (history + row + history_length - 1).strided_store[width=W](
+                    oldest_values, history_length
+                )
+            noise_power.store(k, minimum_values)
+            var residual = max(power_values - beta * minimum_values, zeros)
+            var ratios = power_values.gt(0.0).select(
+                residual / power_values, zeros
+            )
+            gain.store(k, max(ratios, floors))
+            k += W
+
+    while k < stop:
         var re = spectrum[2 * k]
         var im = spectrum[2 * k + 1]
         var power_value = re * re + im * im
@@ -117,6 +161,49 @@ def gain_filter(
             if value < gmin:
                 value = gmin
         gain[k] = value
+        k += 1
+
+
+def gain_filter(
+    spectrum: Ptr,
+    history: Ptr,
+    signal_power: Ptr,
+    noise_power: Ptr,
+    gain: Ptr,
+    n_bins: Int,
+    history_length: Int,
+    beta: Float64,
+    alpha: Float64,
+    gmin: Float64,
+):
+    gain_filter_range(
+        spectrum,
+        history,
+        signal_power,
+        noise_power,
+        gain,
+        n_bins,
+        history_length,
+        beta,
+        alpha,
+        gmin,
+        0,
+        n_bins,
+    )
+
+
+def spectrum_is_finite(spectrum: Ptr, length: Int) -> Bool:
+    comptime W = simd_width_of[DType.float64]()
+    var i = 0
+    while i + W <= length:
+        if not isfinite(spectrum.load[width=W](i)).reduce_and():
+            return False
+        i += W
+    while i < length:
+        if not isfinite(spectrum[i]):
+            return False
+        i += 1
+    return True
 
 
 def apply_spectral_sub_impl(
@@ -274,8 +361,11 @@ def mnr_gain_filter_f64(
         or gmin > 1.0
     ):
         return 0
+    var spectrum_pointer = Ptr(unsafe_from_address=spectrum)
+    if not spectrum_is_finite(spectrum_pointer, 2 * n_bins):
+        return -1
     gain_filter(
-        Ptr(unsafe_from_address=spectrum),
+        spectrum_pointer,
         Ptr(unsafe_from_address=history),
         Ptr(unsafe_from_address=signal_power),
         Ptr(unsafe_from_address=noise_power),

@@ -71,6 +71,7 @@ def timeit(function, repeat=5):
 def main():
     rng = np.random.default_rng(0)
     spectra = np.fft.rfft(rng.normal(size=(2000, 512)), axis=1)
+    spectra_large = np.fft.rfft(rng.normal(size=(16, 65_536)), axis=1)
     audio_10s = rng.normal(size=160_000)
     audio_60s = rng.normal(size=960_000)
 
@@ -84,8 +85,19 @@ def main():
         for spectrum in spectra:
             subtractor.compute_gain_filter(spectrum)
 
+    def mojo_large_gains():
+        subtractor = nr.SpectralSub(65_536, 25, 31, 30, 1)
+        for spectrum in spectra_large:
+            subtractor.compute_gain_filter(spectrum)
+
+    def numpy_large_gains():
+        subtractor = NumPySpectralSub(65_536, 25, 31, 30, 1)
+        for spectrum in spectra_large:
+            subtractor.compute_gain_filter(spectrum)
+
     cases = [
         ("gain filter, 2000 frames", mojo_gains, numpy_gains),
+        ("gain filter, 16 large frames", mojo_large_gains, numpy_large_gains),
         (
             "one-shot, 10 s at 16 kHz",
             lambda: nr.apply_spectral_sub(audio_10s),

@@ -104,9 +104,10 @@ parameters; the reference uses NumPy FFTs and array operations frame by frame.
 
 | case | Mojo | NumPy reference | reference / Mojo |
 | --- | ---: | ---: | ---: |
-| gain filter, 2000 frames | 56.170 ms | 146.524 ms | 2.61x faster |
-| one-shot, 10 s at 16 kHz | 16.415 ms | 82.636 ms | 5.03x faster |
-| one-shot, 60 s at 16 kHz | 99.241 ms | 585.744 ms | 5.90x faster |
+| gain filter, 2000 frames | 38.843 ms | 125.293 ms | 3.23x faster |
+| gain filter, 16 large frames | 27.350 ms | 67.635 ms | 2.47x faster |
+| one-shot, 10 s at 16 kHz | 16.277 ms | 80.839 ms | 4.97x faster |
+| one-shot, 60 s at 16 kHz | 102.656 ms | 515.198 ms | 5.02x faster |
 
 Reproduce the table under the repository-wide benchmark lock with:
 
@@ -114,7 +115,13 @@ Reproduce the table under the repository-wide benchmark lock with:
 pixi run bench
 ```
 
-No GPU or parallel CPU path is included or benchmarked.
+No GPU path is included. The targeted gain kernel is memory-bound: each history
+update performs roughly one comparison per 16 bytes loaded and stored, far below
+the approximately 2-flop-per-byte threshold where device transfer and launch
+costs become worthwhile. The already-fast one-shot path was not changed. The
+standard 257-bin gain workload also remains serial because thread launch overhead
+would dominate it; this pinned Mojo standard library does not expose a CPU
+parallelization primitive for a separate large-input path.
 
 ## How it works
 
@@ -129,10 +136,12 @@ cached periodic Hann window, runs an in-place radix-2 FFT, estimates each freque
 bin's noise power from a circular history buffer, applies the floored
 spectral-subtraction gain, and reconstructs the signal with normalized overlap-add
 at 50 percent hop. Native-width SIMD handles buffer initialization, final
-normalization, and fused history minimum/shift updates with scalar remainder loops.
-The common `alpha=1` case avoids a scalar power call. Scratch arrays share one
-NumPy allocation, and `SpectralSub.compute_gain_filter` retains its rolling power
-state in NumPy-owned memory with one small Mojo call per spectrum.
+normalization, finite-input validation, and the common `alpha=1` gain/history
+update across frequency bins, with scalar remainder loops. The common `alpha=1`
+case also avoids a scalar power call. Scratch arrays share one NumPy allocation,
+and `SpectralSub.compute_gain_filter` retains its rolling power state in
+NumPy-owned memory with one small Mojo call per spectrum and no validation
+temporary.
 
 ## License
 

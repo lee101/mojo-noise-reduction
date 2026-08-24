@@ -65,8 +65,6 @@ class SpectralSub:
         spectrum = np.ascontiguousarray(X, dtype=np.complex128)
         if spectrum.ndim != 1 or spectrum.size != self.n_bins:
             raise ValueError(f"X must be a one-dimensional spectrum of length {self.n_bins}")
-        if not np.all(np.isfinite(spectrum)):
-            raise ValueError("X must contain only finite values")
         ok = lib().mnr_gain_filter_f64(
             spectrum.ctypes.data,
             spectrum.size * 2,
@@ -84,6 +82,8 @@ class SpectralSub:
             self.alpha,
             self.gmin,
         )
+        if ok < 0:
+            raise ValueError("X must contain only finite values")
         if not ok:
             raise RuntimeError("Mojo gain-filter kernel rejected valid inputs")
         return self._gain.copy()
